@@ -1,2 +1,7 @@
 /venv
 .env
+
+
+# Ignore Python bytecode
+*.pyc
+__pycache__/
