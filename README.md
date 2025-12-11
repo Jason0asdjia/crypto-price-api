@@ -52,7 +52,7 @@ vercel部署直接设置相应环境变量即可
 
 本地运行时候
 ```shell
-curl -H "x-api-token: 你的TOKEN" https://your-vercel-domain/api/hello
+curl -H "x-api-token: 你的TOKEN" http://127.0.0.1:5000/api/cron-update-cache
 ```
 
 ios上使用shortcuts
