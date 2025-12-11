@@ -7,7 +7,7 @@
 
 🔑 基于 x-api-token 的 API 访问权限验证
 
-🪙 调用 CoinMarketCap API 获取实时加密货币价格
+🪙 调用 CoinMarketCap API 获取实时加密货币价格（5分钟缓存，防止api接口访问过度）
 
 📝 自动写入到 Notion 数据库
 
