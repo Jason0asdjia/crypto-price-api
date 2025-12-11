@@ -26,6 +26,7 @@ app = Flask(__name__)
 CMC_API_KEY = os.environ.get("CMC_API_KEY")
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
+API_SECRET = os.getenv("API_SECRET")
 
 
 # === Vercel KV 缓存配置 ===
@@ -78,6 +79,10 @@ if not redis_client and os.environ.get("VERCEL_ENV") != "production":
     redis_client = FakeRedis()
     print("Using in-memory cache for local development")
 
+
+# 注册 Token 验证中间件
+from lib.utils import register_token_verifier
+register_token_verifier(app)
 
 @app.route('/api/cron-update-cache', methods=['GET'])
 def cron_update_cache():

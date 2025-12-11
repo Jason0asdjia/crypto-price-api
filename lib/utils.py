@@ -1,3 +1,15 @@
+from flask import request, jsonify
+import os
+API_SECRET = os.getenv("API_SECRET")
+
+def register_token_verifier(app):
+    @app.before_request
+    def verify_token():
+        token = request.headers.get("x-api-token")
+        if token != API_SECRET:
+            return jsonify({"error": "Invalid token"}), 401
+        
+
 def get_price_from_cmc_data(cmc_data, symbol):
     """
     从 CMC v2 quotes/latest 返回的 cmc_data 中安全取出 price
@@ -22,4 +34,3 @@ def get_price_from_cmc_data(cmc_data, symbol):
         raise TypeError(f"意外的数据类型: {type(symbol_data)}")
     
     return coin['quote']['USD']['price']
-
