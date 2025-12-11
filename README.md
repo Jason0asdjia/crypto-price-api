@@ -48,7 +48,7 @@ vercel部署直接设置相应环境变量即可
 | **requirements.txt** | 项目依赖列表。                              |
 
 
-## 🌐调试相关
+## 🌐部署相关
 
 本地运行时候
 ```shell
@@ -59,3 +59,6 @@ ios上使用shortcuts
 ```markdown
 TODO
 ```
+
+## 🔜TODO
+notion数据库添加24小时涨跌幅字段，通过api获取更新
