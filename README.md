@@ -46,3 +46,16 @@ vercel部署直接设置相应环境变量即可
 | **lib/utils.py**     | 工具函数，包括基于 `x-api-token` 的访问授权验证。     |
 | **vercel.json**      | Vercel Serverless 的入口配置。             |
 | **requirements.txt** | 项目依赖列表。                              |
+
+
+## 🌐调试相关
+
+本地运行时候
+```shell
+curl -H "x-api-token: 你的TOKEN" https://your-vercel-domain/api/hello
+```
+
+ios上使用shortcuts
+```markdown
+TODO
+```
