@@ -10,9 +10,10 @@ def register_token_verifier(app):
             return jsonify({"error": "Invalid token"}), 401
         
 
-def get_price_from_cmc_data(cmc_data, symbol):
+def get_cmc_field_data(cmc_data, symbol, field="price"):
     """
-    从 CMC v2 quotes/latest 返回的 cmc_data 中安全取出 price
+    从 CMC v2 quotes/latest 返回的 cmc_data 中安全取出指定 field 的数据。
+    field 可为 "price" 或 "percent_change_24h" 等。
     """
     symbol_data = cmc_data.get('data', {}).get(symbol)
     
@@ -33,4 +34,8 @@ def get_price_from_cmc_data(cmc_data, symbol):
     else:
         raise TypeError(f"意外的数据类型: {type(symbol_data)}")
     
-    return coin['quote']['USD']['price']
+    # 提取所需字段的数据
+    if field not in coin['quote']['USD']:
+         raise KeyError(f"CMC 数据中缺少字段: {field}")
+    
+    return coin['quote']['USD'][field]

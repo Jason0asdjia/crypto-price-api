@@ -4,7 +4,7 @@ from flask import jsonify
 symbol_to_page = {}
 
 
-def notion_get(notion, NOTION_TOKEN, NOTION_DATABASE_ID, NOTION_SYMBOL_PROPERTY_NAME):
+def notion_get(notion, NOTION_DATABASE_ID, NOTION_SYMBOL_PROPERTY_NAME):
 
     db_response = notion.databases.retrieve(database_id=NOTION_DATABASE_ID)
     data_sources = db_response.get("data_sources", [])  # 列表，可能多个
@@ -38,22 +38,22 @@ def notion_get(notion, NOTION_TOKEN, NOTION_DATABASE_ID, NOTION_SYMBOL_PROPERTY_
     
     return symbols_list
 
-def notion_update(notion, price_data, NOTION_PRICE_PROPERTY_NAME):
+def notion_update(notion, price_data, PRICE_FIELD, CHANGE_FIELD):
     updated_count = 0
+
     for symbol, page_id in symbol_to_page.items():
-        price = price_data.get(symbol)
+        info = price_data.get(symbol)
 
-        if price is not None:
-            # ✅ notion.pages.update 调用方式正确
-            notion.pages.update(
-                page_id=page_id,
-                properties={
-                    NOTION_PRICE_PROPERTY_NAME: {
-                        "number": price
-                    }
-                }
-            )
+        if not info:
+            continue
 
-            updated_count += 1
+        notion.pages.update(
+            page_id=page_id,
+            properties={
+                PRICE_FIELD: {"number": info["price"]},
+                CHANGE_FIELD: {"number": info["change_24h"]},
+            }
+        )
+        updated_count += 1
 
     return updated_count

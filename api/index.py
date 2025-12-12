@@ -13,7 +13,7 @@ import time
 from redis import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from lib.utils import get_price_from_cmc_data
+from lib.utils import get_cmc_field_data
 from lib.notion import notion_get, notion_update
 
 # 加载环境变量
@@ -32,9 +32,7 @@ API_SECRET = os.getenv("API_SECRET")
 # === Vercel KV 缓存配置 ===
 # Vercel 会自动注入这些环境变量（只需在 dashboard 开通 KV 并绑定）
 KV_URL = os.environ.get("KV_URL")  # Vercel 自动提供
-KV_REST_API_URL = os.environ.get("KV_REST_API_URL")
-KV_REST_API_TOKEN = os.environ.get("KV_REST_API_TOKEN")
-KV_REST_API_READ_ONLY_TOKEN = os.environ.get("KV_REST_API_READ_ONLY_TOKEN")
+
 
 # 初始化 Redis 客户端（兼容 Vercel KV）
 redis_client = None
@@ -49,13 +47,13 @@ if KV_URL:
         redis_client = None
 
 CACHE_TTL = 300  # 5分钟 = 300秒
-CACHE_KEY_PREFIX = "cmc_price:"
+CACHE_KEY_PREFIX = "cmc_api_cache:"
 
 
 # --- Notion 属性名 ---
 NOTION_SYMBOL_PROPERTY_NAME = "Symbol"
 NOTION_PRICE_PROPERTY_NAME = "Price"
-# NOTION_PRICE_PROPERTY_NAME = "Updated_Time"
+NOTION_CHANGE_24H_PROPERTY_NAME = "24H Change"
 
 CMC_BASE_URL = "https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest"
 
@@ -92,24 +90,28 @@ def cron_update_cache():
     try:
          
         notion = Client(auth=NOTION_TOKEN)
-        symbols_list = notion_get(notion, NOTION_TOKEN, NOTION_DATABASE_ID, NOTION_SYMBOL_PROPERTY_NAME)
+        symbols_list = notion_get(notion, NOTION_DATABASE_ID, NOTION_SYMBOL_PROPERTY_NAME)
         # === 缓存逻辑：批量读取已有缓存 ===
         price_data = {}
         symbols_to_fetch = []
 
         for symbol in symbols_list:
-            cache_key = f"{CACHE_KEY_PREFIX}{symbol}"
-            if redis_client:
-                try:
-                    cached = redis_client.get(cache_key)
-                    if cached:
-                        price_data[symbol] = float(cached)
-                        print(f"Cache hit: {symbol} = ${price_data[symbol]:,.4f}")
-                        continue
-                except:
-                    pass
-            # 没缓存或连接失败，加入待请求列表
+            cache_key_price = f"{CACHE_KEY_PREFIX}{symbol}:price"
+            cache_key_change = f"{CACHE_KEY_PREFIX}{symbol}:change"
+
+            cached_price = redis_client.get(cache_key_price) if redis_client else None
+            cached_change = redis_client.get(cache_key_change) if redis_client else None
+
+            if cached_price and cached_change:
+                price_data[symbol] = {
+                    "price": float(cached_price),
+                    "change_24h": float(cached_change)
+                }
+                print(f"Cache hit: {symbol} | price={cached_price} | change={cached_change}")
+                continue
+
             symbols_to_fetch.append(symbol)
+
 
         # === 如果全部命中缓存，直接跳过请求 ===
         if not symbols_to_fetch:
@@ -136,38 +138,52 @@ def cron_update_cache():
                 # 写入缓存 + 收集价格
                 for symbol in symbols_to_fetch:
                     try:
-                        price = get_price_from_cmc_data(cmc_data, symbol)
-                        price_data[symbol] = price
+                        # 价格
+                        price = get_cmc_field_data(cmc_data, symbol, "price")
 
-                        # 写入缓存（仅当有 redis 客户端时）
+                        # 24小时涨跌幅
+                        change_24h = get_cmc_field_data(cmc_data, symbol, "percent_change_24h")
+
+                        # 放入本地数据结构
+                        price_data[symbol] = {
+                            "price": price,
+                            "change_24h": change_24h
+                        }
+
+                        # 缓存
                         if redis_client:
-                            cache_key = f"{CACHE_KEY_PREFIX}{symbol}"
-                            redis_client.setex(cache_key, CACHE_TTL, price)
-                        print(f"Fresh {symbol}: ${price:,.4f} -> cached for 5min")
+                            redis_client.setex(f"{CACHE_KEY_PREFIX}{symbol}:price", CACHE_TTL, price)
+                            redis_client.setex(f"{CACHE_KEY_PREFIX}{symbol}:change", CACHE_TTL, change_24h)
+                            print(f"Fresh {symbol}: ${price:,.4f} -> cached for 5min")
                     except Exception as e:
                         print(f"获取 {symbol} 失败: {e}")
                         price_data[symbol] = None
 
             except requests.exceptions.RequestException as e:
                 print("CMC 请求失败:", e)
-                # 即使请求失败，也尽量用旧缓存（如果有）
-                for symbol in symbols_to_fetch:
-                    if symbol not in price_data:
-                        cache_key = f"{CACHE_KEY_PREFIX}{symbol}"
-                        if redis_client:
-                            try:
-                                cached = redis_client.get(cache_key)
-                                if cached:
-                                    price_data[symbol] = float(cached)
-                                    print(f"Fallback to old cache for {symbol}")
-                            except:
-                                pass
-                        if symbol not in price_data:
-                            price_data[symbol] = None
+                # CMC 请求失败 fallback（读取旧缓存）
+                cached_price = redis_client.get(f"{CACHE_KEY_PREFIX}{symbol}:price")
+                cached_change = redis_client.get(f"{CACHE_KEY_PREFIX}{symbol}:change")
+
+                if cached_price and cached_change:
+                    price_data[symbol] = {
+                        "price": float(cached_price),
+                        "change_24h": float(cached_change)
+                    }
+                    print(f"Fallback to old cache for {symbol}")
+                else:
+                    price_data[symbol] = None
+
 
 
         # 更新 Notion 页面
-        updated_count = notion_update(notion, price_data, NOTION_PRICE_PROPERTY_NAME)
+        updated_count = notion_update(
+            notion,
+            price_data,
+            NOTION_PRICE_PROPERTY_NAME,
+            NOTION_CHANGE_24H_PROPERTY_NAME
+        )
+
 
         return jsonify({
             "status": "Success",
