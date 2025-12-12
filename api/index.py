@@ -208,6 +208,6 @@ def cron_update_cache():
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+# 仅本地测试用
+# if __name__ == "__main__":
+#     app.run(host="0.0.0.0", port=5000, debug=True)

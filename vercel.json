@@ -1,15 +1,12 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/index.py",
-      "use": "@vercel/python"
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.12",
+      "maxDuration": 60
     }
-  ],
+  },
   "routes": [
-    {
-      "src": "/api/cron-update-cache",
-      "dest": "api/index.py"
-    }
+    { "src": "/api/(.*)", "dest": "/api/index.py" }
   ]
 }
