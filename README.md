@@ -57,7 +57,8 @@ curl -H "x-api-token: 你的TOKEN" http://127.0.0.1:5000/api/cron-update-cache
 
 ios上使用shortcuts
 ```markdown
-TODO
+1. 创建获取URL内容：填写url(Vercel部署后的url)，头部添加x-api-token: 你的TOKEN
+2. 创建显示通知：显示URL内容
 ```
 
 ## 🔜TODO
