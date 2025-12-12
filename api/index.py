@@ -21,6 +21,9 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# === Import Redis module ===
+from lib.redis import redis_client, CACHE_TTL, CACHE_KEY_PREFIX
+
 
 # --- 环境变量配置 (在 Vercel 中设置) ---
 CMC_API_KEY = os.environ.get("CMC_API_KEY")
@@ -29,53 +32,12 @@ NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 API_SECRET = os.getenv("API_SECRET")
 
 
-# === Vercel KV 缓存配置 ===
-# Vercel 会自动注入这些环境变量（只需在 dashboard 开通 KV 并绑定）
-KV_URL = os.environ.get("KV_URL")  # Vercel 自动提供
-
-
-# 初始化 Redis 客户端（兼容 Vercel KV）
-redis_client = None
-if KV_URL:
-    try:
-        redis_client = Redis.from_url(KV_URL, decode_responses=True)
-        # 测试连接（可选）
-        redis_client.ping()
-        print("Vercel KV 连接成功！")
-    except Exception as e:
-        print("Vercel KV 连接失败，将禁用缓存:", e)
-        redis_client = None
-
-CACHE_TTL = 300  # 5分钟 = 300秒
-CACHE_KEY_PREFIX = "cmc_api_cache:"
-
-
 # --- Notion 属性名 ---
 NOTION_SYMBOL_PROPERTY_NAME = "Symbol"
 NOTION_PRICE_PROPERTY_NAME = "Price"
 NOTION_CHANGE_24H_PROPERTY_NAME = "24H Change"
 
 CMC_BASE_URL = "https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest"
-
-# 本地开发时用内存模拟（可选）
-if not redis_client and os.environ.get("VERCEL_ENV") != "production":
-    class FakeRedis:
-        def __init__(self):
-            self.store = {}
-            self.ttl = {}
-        def setex(self, key, ttl, value):
-            self.store[key] = value
-            self.ttl[key] = time.time() + ttl
-        def get(self, key):
-            if key in self.store and (not key in self.ttl or time.time() < self.ttl[key]):
-                return self.store[key]
-            self.store.pop(key, None)
-            self.ttl.pop(key, None)
-            return None
-        def ping(self): return True
-
-    redis_client = FakeRedis()
-    print("Using in-memory cache for local development")
 
 
 # 注册 Token 验证中间件
