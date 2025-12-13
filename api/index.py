@@ -6,15 +6,15 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
-from notion_client import Client
+from notion_client import APIResponseError, Client
 from dotenv import load_dotenv
 from pprint import pprint
 import time
 from redis import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from lib.utils import get_cmc_field_data
-from lib.notion import notion_get, notion_update
+from lib.utils import get_cmc_field_data, now_with_timezone
+from lib.notion import notion_get, notion_update, notion_get_holdings_rows, notion_create_account_snapshot
 
 # 加载环境变量
 load_dotenv()
@@ -29,6 +29,8 @@ from lib.redis import redis_client, CACHE_TTL, CACHE_KEY_PREFIX
 CMC_API_KEY = os.environ.get("CMC_API_KEY")
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
+NOTION_HOLDINGS_DATABASE_ID = os.environ["NOTION_HOLDINGS_DATABASE_ID"]
+NOTION_SNAPSHOT_DATABASE_ID = os.environ["NOTION_SNAPSHOT_DATABASE_ID"]
 API_SECRET = os.getenv("API_SECRET")
 
 
@@ -170,6 +172,102 @@ def cron_update_cache():
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 
+
+@app.route('/api/update-account-snapshot', methods=['GET'])
+def update_account_snapshot():
+    """
+    更新账户快照（Account Snapshot）
+
+    功能：
+    - 从 Holdings 数据库读取当前持仓
+    - 计算账户总市值 / 总投入 / 总盈亏
+    - 写入一条 Snapshot 记录到 Snapshot 数据库
+
+    请求参数（Query）：
+    - timezone: IANA 时区名（默认 UTC），如 Asia/Tokyo
+
+    返回：
+    - 账户统计汇总信息
+    """
+    try:
+        # 读取并生成快照时间
+        tz_name = request.args.get("timezone", "UTC")
+        snapshot_time = now_with_timezone(tz_name)
+
+        notion = Client(auth=NOTION_TOKEN)
+
+        holdings = notion_get_holdings_rows(
+            notion,
+            NOTION_HOLDINGS_DATABASE_ID
+        )
+
+        # 计算账户级指标
+        total_market_value = 0.0   # 账户总市值
+        total_invested = 0.0       # 账户总投入（历史买入成本）
+
+        for row in holdings:
+            props = row["properties"]
+
+            # 当前市值（Formula 字段）
+            total_market_value += props["当前市值"]["formula"]["number"] or 0
+
+            # 总买入成本（Rollup 字段）
+            total_invested += props["总买入成本"]["rollup"]["number"] or 0
+
+        # 总盈亏 = 当前市值 - 总投入
+        total_pnl = total_market_value - total_invested
+
+        # 写入 Snapshot 数据库
+        notion_create_account_snapshot(
+            notion,
+            NOTION_SNAPSHOT_DATABASE_ID,
+            total_market_value,
+            total_invested,
+            total_pnl,
+            len(holdings),
+            snapshot_time
+        )
+
+        return jsonify({
+            "status": "success",
+            "snapshot_time": snapshot_time,
+            "timezone": tz_name,
+            "总市值": total_market_value,
+            "总投入": total_invested,
+            "总盈亏": total_pnl,
+            "资产数量": len(holdings)
+        })
+
+    # ❌ 异常处理（分类型）
+    except APIResponseError as e:
+        # Notion API 返回的错误（403 / 404 / 429 等）
+        return jsonify({
+            "error": "Notion API error",
+            "message": str(e),
+            "status_code": e.status
+        }), 502
+
+    except KeyError as e:
+        # Notion 字段名不存在 / 拼写错误
+        return jsonify({
+            "error": "Notion schema error",
+            "message": f"Missing property: {str(e)}"
+        }), 500
+
+    except ValueError as e:
+        # 数据格式错误（如时间解析）
+        return jsonify({
+            "error": "Value error",
+            "message": str(e)
+        }), 400
+
+    except Exception as e:
+        # 未知错误
+        return jsonify({
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+    
 # 仅本地测试用
-# if __name__ == "__main__":
-#     app.run(host="0.0.0.0", port=5000, debug=True)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

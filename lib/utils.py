@@ -1,5 +1,9 @@
 from flask import request, jsonify
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+
 API_SECRET = os.getenv("API_SECRET")
 
 def register_token_verifier(app):
@@ -39,3 +43,13 @@ def get_cmc_field_data(cmc_data, symbol, field="price"):
          raise KeyError(f"CMC 数据中缺少字段: {field}")
     
     return coin['quote']['USD'][field]
+
+
+
+def now_with_timezone(tz_name: str):
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+
+    return datetime.now(tz).isoformat(timespec="seconds")
