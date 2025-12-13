@@ -9,7 +9,7 @@
 
 🪙 调用 CoinMarketCap API 获取实时加密货币价格（5分钟缓存，防止api接口访问过度）
 
-📝 自动写入到 Notion 数据库
+📝 自动写入到 Notion 数据库，每日自动计算并快照响应数据
 
 ☁️ 支持本地运行，也支持 Vercel 云端部署
 
@@ -33,6 +33,14 @@ NOTION_DATABASE_ID=你的数据库ID
 # 自定义 API 访问密钥
 API_SECRET=你的访问密钥
 
+# 快照源数据库ID
+NOTION_HOLDINGS_DATABASE_ID
+
+# 快照目标数据库ID
+NOTION_SNAPSHOT_DATABASE_ID
+
+# 缓存地址
+REDIS_URL=Vercel上创建redis后获取
 ```
 vercel部署直接设置相应环境变量即可
 
