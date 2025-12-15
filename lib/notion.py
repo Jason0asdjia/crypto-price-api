@@ -8,7 +8,9 @@ symbol_to_page = {}
 
 
 def notion_get(notion, NOTION_DATABASE_ID, NOTION_SYMBOL_PROPERTY_NAME):
-
+    """
+    Crypto Market 数据库 读取方法
+    """
     db_response = notion.databases.retrieve(database_id=NOTION_DATABASE_ID)
     data_sources = db_response.get("data_sources", [])  # 列表，可能多个
     if data_sources:
@@ -42,6 +44,9 @@ def notion_get(notion, NOTION_DATABASE_ID, NOTION_SYMBOL_PROPERTY_NAME):
     return symbols_list
 
 def notion_update(notion, price_data, PRICE_FIELD, CHANGE_FIELD):
+    """
+    Crypto Market 数据库 更新方法
+    """
     updated_count = 0
 
     for symbol, page_id in symbol_to_page.items():
@@ -64,6 +69,7 @@ def notion_update(notion, price_data, PRICE_FIELD, CHANGE_FIELD):
 
 def notion_get_holdings_rows(notion, HOLDINGS_DATABASE_ID):
     """
+    Holdings 数据库
     【账户聚合读取】方法
     当前有效持仓的所有行
     """
@@ -151,3 +157,246 @@ def notion_create_account_snapshot(
             }
         }
     )
+
+
+def notion_get_pending_or_error_holdings(
+    notion: Client,
+    HOLDINGS_DB_ID: str,
+):
+    """
+    获取需要进行 Summary 同步的 Holdings 行：
+    - Summary Sync Status = pending
+    - Summary Sync Status = error
+    - Summary Sync Status 为空（未设置）
+    """
+
+    db_response = notion.databases.retrieve(
+        database_id=HOLDINGS_DB_ID
+    )
+
+    data_sources = db_response.get("data_sources", [])
+    if not data_sources:
+        raise ValueError("No data sources found in Holdings DB")
+
+    data_source_id = data_sources[0]["id"]
+
+    # ⚠️ 不在 query 里做复杂筛选，全部拉回后代码判断
+    response = notion.data_sources.query(
+        data_source_id=data_source_id
+    )
+
+    result = []
+
+    for row in response["results"]:
+        props = row["properties"]
+
+        status_prop = props.get("Summary Sync Status")
+
+        # 没有这个字段（理论不该发生，但兜底）
+        if not status_prop:
+            result.append(row)
+            continue
+
+        select_val = status_prop.get("select")
+
+        # 为空（未选择）
+        if select_val is None:
+            result.append(row)
+            continue
+
+        status_name = select_val.get("name")
+
+        if status_name in ("pending", "error"):
+            result.append(row)
+
+    return result
+
+
+
+
+def mark_holdings_as_synced(notion: Client, rows: list):
+    for row in rows:
+        notion.pages.update(
+            page_id=row["id"],
+            properties={
+                "Summary Sync Status": {
+                    "select": {
+                        "name": "synced"
+                    }
+                }
+            }
+        )
+
+def mark_holdings_as_error(notion: Client, rows: list, message: str = ""):
+    for row in rows:
+        notion.pages.update(
+            page_id=row["id"],
+            properties={
+                "Summary Sync Status": {
+                    "select": {
+                        "name": "error"
+                    }
+                }
+            }
+        )
+
+
+def sync_summary_for_new_holdings_rows(
+    notion: Client,
+    new_holdings_rows: list,
+    SUMMARY_DB_ID: str,
+):
+    """
+    根据 Holdings 行同步 Crypto Summary（最终生产版）
+
+    行为：
+    - Summary 唯一键：(币种 + Global/账本)
+    - Summary.Global 继承 Holdings.账本
+    - 单行失败不中断整体
+    - 失败行标记为 error，并打印关键信息
+    """
+
+    # ==================================================
+    # 1. 读取已有 Summary 的 (symbol, ledger) 键
+    # ==================================================
+    summary_keys = set()
+
+    db_response = notion.databases.retrieve(
+        database_id=SUMMARY_DB_ID
+    )
+
+    data_sources = db_response.get("data_sources", [])
+    if not data_sources:
+        raise ValueError("No data sources found in Summary DB")
+
+    data_source_id = data_sources[0]["id"]
+
+    resp = notion.data_sources.query(
+        data_source_id=data_source_id
+    )
+
+    for row in resp["results"]:
+        props = row.get("properties", {})
+
+        title_arr = props.get("币种", {}).get("title", [])
+        if not title_arr:
+            continue
+        symbol = title_arr[0]["plain_text"].strip()
+        if not symbol:
+            continue
+
+        ledger_rel = props.get("Global", {}).get("relation", [])
+        if not ledger_rel:
+            continue
+        ledger_id = ledger_rel[0]["id"]
+
+        summary_keys.add((symbol, ledger_id))
+
+    # ==================================================
+    # 2. 逐行处理 Holdings（单行容错）
+    # ==================================================
+    created = []
+    failed = []
+
+    for row in new_holdings_rows:
+        holding_id = row.get("id")
+
+        try:
+            props = row.get("properties", {})
+
+            # ---------- 币种 ----------
+            title_arr = props.get("币种", {}).get("title", [])
+            if not title_arr:
+                raise ValueError("Missing 币种")
+
+            symbol = title_arr[0]["plain_text"].strip()
+            if not symbol:
+                raise ValueError("Empty 币种")
+
+            # ---------- 账本 ----------
+            ledger_rel = props.get("账本", {}).get("relation", [])
+            if not ledger_rel:
+                raise ValueError("Missing 账本 relation")
+
+            ledger_id = ledger_rel[0]["id"]
+            key = (symbol, ledger_id)
+
+            # ---------- 已存在则跳过 ----------
+            if key in summary_keys:
+                continue
+
+            # ---------- 创建 Summary ----------
+            notion.pages.create(
+                parent={"database_id": SUMMARY_DB_ID},
+                properties={
+                    "币种": {
+                        "title": [
+                            {"text": {"content": symbol}}
+                        ]
+                    },
+                    # 🔑 关键修复点
+                    "持仓币种": {
+                        "relation": [
+                            {
+                                "id": holding_id  # 当前这条 Holdings 行
+                            }
+                        ]
+                    },
+                    "Global": {
+                        "relation": ledger_rel
+                    }
+                }
+            )
+
+
+            summary_keys.add(key)
+
+            created.append({
+                # "holding_id": holding_id,
+                "symbol": symbol
+                # "ledger_id": ledger_id
+            })
+
+        except Exception as e:
+            # ==================================================
+            # ❌ 单行失败：打印关键信息 + 标记 error
+            # ==================================================
+            error_msg = str(e)
+
+            print(
+                "[Summary Sync ERROR]",
+                f"holding_id={holding_id}",
+                f"symbol={symbol if 'symbol' in locals() else 'UNKNOWN'}",
+                f"ledger_id={ledger_id if 'ledger_id' in locals() else 'NONE'}",
+                f"error={error_msg}"
+            )
+
+            try:
+                notion.pages.update(
+                    page_id=holding_id,
+                    properties={
+                        "Summary Sync Status": {
+                            "select": {
+                                "name": "error"
+                            }
+                        }
+                    }
+                )
+            except Exception as update_err:
+                print(
+                    "[Summary Sync ERROR][Status Update Failed]",
+                    f"holding_id={holding_id}",
+                    f"error={update_err}"
+                )
+
+            failed.append({
+                # "holding_id": holding_id,
+                "error": error_msg
+            })
+
+    return {
+        "created_count": len(created),
+        "failed_count": len(failed),
+        "created": created,
+        "failed": failed
+    }

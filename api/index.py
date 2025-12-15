@@ -14,7 +14,12 @@ from redis import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from lib.utils import get_cmc_field_data, now_with_timezone
-from lib.notion import notion_get, notion_update, notion_get_holdings_rows, notion_create_account_snapshot
+from lib.notion import notion_get, notion_update, notion_get_holdings_rows, notion_create_account_snapshot,\
+                        notion_get_pending_or_error_holdings, mark_holdings_as_error, mark_holdings_as_synced,\
+                        sync_summary_for_new_holdings_rows
+
+
+
 
 # 加载环境变量
 load_dotenv()
@@ -31,6 +36,7 @@ NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 NOTION_HOLDINGS_DATABASE_ID = os.environ["NOTION_HOLDINGS_DATABASE_ID"]
 NOTION_SNAPSHOT_DATABASE_ID = os.environ["NOTION_SNAPSHOT_DATABASE_ID"]
+NOTION_SUMMARY_DATABASE_ID = os.environ["NOTION_SUMMARY_DATABASE_ID"]
 API_SECRET = os.getenv("API_SECRET")
 
 
@@ -268,6 +274,59 @@ def update_account_snapshot():
             "message": str(e)
         }), 500
     
-# 仅本地测试用
+
+@app.route('/api/sync-crypto-summary', methods=['GET'])
+def sync_crypto_summary():
+    """
+    最终版：
+    - 程序自动筛选新增 Holdings（pending）
+    - 同步 Summary（继承账本）
+    - 保证唯一性
+    - 成功后标记 synced，失败标记 error
+    """
+    try:
+        notion = Client(auth=NOTION_TOKEN)
+
+        # ① 筛选“新增的 Holdings”
+        new_rows = notion_get_pending_or_error_holdings(
+            notion,
+            NOTION_HOLDINGS_DATABASE_ID
+        )
+
+        if not new_rows:
+            return jsonify({
+                "status": "skipped",
+                "message": "No pending holdings"
+            }), 200
+
+        # ② 同步 Summary（原子）
+        result = sync_summary_for_new_holdings_rows(
+            notion=notion,
+            new_holdings_rows=new_rows,
+            SUMMARY_DB_ID=NOTION_SUMMARY_DATABASE_ID
+        )
+
+        # ③ 标记为 synced
+        mark_holdings_as_synced(notion, new_rows)
+
+        return jsonify({
+            "status": "success",
+            "processed": len(new_rows),
+            **result
+        }), 200
+
+    except Exception as e:
+        # ❌ 出错则标记 error
+        try:
+            mark_holdings_as_error(notion, new_rows)
+        except:
+            pass
+
+        return jsonify({
+            "error": "Summary sync failed",
+            "message": str(e)
+        }), 500
+
+# # 仅本地测试用
 # if __name__ == "__main__":
 #     app.run(host="0.0.0.0", port=5000, debug=True)
