@@ -5,10 +5,23 @@ from zoneinfo import ZoneInfo
 
 
 API_SECRET = os.getenv("API_SECRET")
+CRON_SECRET = os.getenv("CRON_SECRET") or API_SECRET
 
 def register_token_verifier(app):
     @app.before_request
     def verify_token():
+        if request.path == "/api/cron":
+            if not CRON_SECRET:
+                return jsonify({"error": "Missing cron secret configuration"}), 500
+
+            token = request.headers.get("Authorization")
+            if token != f"Bearer {CRON_SECRET}":
+                return jsonify({"error": "Invalid token"}), 401
+            return None
+
+        if not API_SECRET:
+            return jsonify({"error": "Missing API secret configuration"}), 500
+
         token = request.headers.get("x-api-token")
         if token != API_SECRET:
             return jsonify({"error": "Invalid token"}), 401

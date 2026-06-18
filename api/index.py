@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request
 import os
 import sys
+from urllib.parse import quote
 # ==================== Vercel 关键修复 ====================
 # 把项目根目录加入 Python 路径，这样才能 import lib
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,6 +39,9 @@ NOTION_HOLDINGS_DATABASE_ID = os.environ["NOTION_HOLDINGS_DATABASE_ID"]
 NOTION_SNAPSHOT_DATABASE_ID = os.environ["NOTION_SNAPSHOT_DATABASE_ID"]
 NOTION_SUMMARY_DATABASE_ID = os.environ["NOTION_SUMMARY_DATABASE_ID"]
 API_SECRET = os.getenv("API_SECRET")
+BARK_BASE_URL = os.getenv("BARK_BASE_URL")
+BARK_ICON_URL = os.getenv("BARK_ICON_URL", "https://assets.coingecko.com/coins/images/1/large/bitcoin.png")
+BARK_GROUP = os.getenv("BARK_GROUP", "cmc_api")
 
 
 # --- Notion 属性名 ---
@@ -51,6 +55,83 @@ CMC_BASE_URL = "https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/lates
 # 注册 Token 验证中间件
 from lib.utils import register_token_verifier
 register_token_verifier(app)
+
+
+def _response_status_code(response):
+    if isinstance(response, tuple):
+        return response[1]
+
+    return response.status_code
+
+
+def _response_json(response):
+    if isinstance(response, tuple):
+        response = response[0]
+
+    return response.get_json(silent=True) or {}
+
+
+def _send_bark_notification(results):
+    if not BARK_BASE_URL:
+        return {
+            "status": "skipped",
+            "reason": "BARK_BASE_URL is not configured",
+        }
+
+    title = quote("CMC API 执行成功", safe="")
+    body_lines = [f"{item['name']}: {item['status_code']}" for item in results]
+    body = quote("\n".join(body_lines), safe="")
+    url = (
+        f"{BARK_BASE_URL}/{title}/{body}"
+        f"?group={quote(BARK_GROUP, safe='')}"
+        f"&icon={quote(BARK_ICON_URL, safe='')}"
+    )
+    response = requests.get(url, timeout=10)
+    response.raise_for_status()
+    return {"status": "sent", "status_code": response.status_code}
+
+
+@app.route('/api/cron', methods=['GET'])
+def cron():
+    jobs = [
+        ("cron-update-cache", cron_update_cache, {}),
+        ("sync-crypto-summary", sync_crypto_summary, {}),
+        ("update-account-snapshot", update_account_snapshot, {"timezone": "Asia/Tokyo"}),
+    ]
+    results = []
+
+    for name, handler, query in jobs:
+        with app.test_request_context(f"/api/{name}", query_string=query):
+            response = handler()
+
+        status_code = _response_status_code(response)
+        body = _response_json(response)
+        results.append({
+            "name": name,
+            "status_code": status_code,
+            "body": body,
+        })
+
+        if status_code < 200 or status_code >= 300:
+            return jsonify({
+                "status": "failed",
+                "failed_job": name,
+                "results": results,
+            }), 500
+
+    try:
+        notification = _send_bark_notification(results)
+    except requests.exceptions.RequestException as e:
+        notification = {
+            "status": "failed",
+            "error": str(e),
+        }
+
+    return jsonify({
+        "status": "success",
+        "results": results,
+        "notification": notification,
+    }), 200
 
 @app.route('/api/cron-update-cache', methods=['GET'])
 def cron_update_cache():
@@ -328,5 +409,5 @@ def sync_crypto_summary():
         }), 500
 
 # # 仅本地测试用
-# if __name__ == "__main__":
-#     app.run(host="0.0.0.0", port=5000, debug=True)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
