@@ -142,6 +142,8 @@ GET /api/cron   (Authorization: Bearer 你的CRON_SECRET)
 - 以 `unique(symbol, bucket_time)` 去重，同一币种同一小时最多一条，配合 upsert 实现幂等写入。
 - `SUPABASE_SERVICE_ROLE_KEY` 只能放服务端（Vercel 环境变量），绝不能暴露到前端。
 
+> ⚠️ **时间约定**：`recorded_at`、`bucket_time` 一律以 **UTC（24 小时制 timestamptz）** 存储。读取/画图时请**先转换到目标时区**（如 Asia/Shanghai）再展示，切勿把 UTC 值直接当本地时间使用，否则会有 8 小时偏差。
+
 ## 👥 分币种持仓快照（Supabase）
 
 `/api/update-account-snapshot` 在读取持仓并更新账户快照的同时，会通过 `lib/supabase_store.py` 把每个币的持仓状态批量 upsert 到 Supabase 的 `crypto_holdings_snapshot` 表：

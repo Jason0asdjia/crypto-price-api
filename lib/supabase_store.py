@@ -1,3 +1,14 @@
+"""Supabase 历史快照写入模块。
+
+⚠️ 时间约定（重要，勿改动）：
+
+- 所有时间字段一律以 **UTC** 存储（下方两表的 `recorded_at`、`bucket_time` 均为 `timestamptz` UTC）。
+- 传入的 `now_iso` 无论带哪个时区（如 Asia/Tokyo），`floor_to_hour()` 都会强制
+  转换为 UTC 后再向下取整到整点小时，因此**入库值恒为 UTC**。
+- 后续读取/画图时，再按目标时区（如 Asia/Shanghai）在前端或查询层做本地化转换即可。
+- 切忌直接按 UTC 值当本地时间使用，否则会出现 8 小时的时区偏差。
+"""
+
 import os
 from datetime import datetime, timezone
 
@@ -27,6 +38,9 @@ else:
 def floor_to_hour(dt: datetime) -> datetime:
     """
     把时间向下取整到整点小时，作为去重键 bucket_time。
+
+    无论传入 dt 带哪个时区，统一先转 UTC 再取整：
+    没有 tzinfo 时按 UTC 处理；带时区时 astimezone(timezone.utc)。
     """
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
