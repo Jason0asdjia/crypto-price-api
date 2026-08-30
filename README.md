@@ -11,7 +11,7 @@
 
 📝 自动写入到 Notion 数据库，每日自动计算并快照响应数据
 
-⏰ 支持 Vercel Cron 统一触发 `/api/cron`，自动顺序执行全部同步任务
+⏰ 支持外部定时调用 `/api/cron`，自动顺序执行全部同步任务
 
 ☁️ 支持本地运行，也支持 Vercel 云端部署
 
@@ -35,7 +35,7 @@ NOTION_DATABASE_ID=你的数据库ID
 # 自定义 API 访问密钥
 API_SECRET=你的访问密钥
 
-# Vercel Cron 访问密钥（未设置时默认复用 API_SECRET）
+# 外部定时器访问密钥（未设置时默认复用 API_SECRET）
 CRON_SECRET=你的Cron访问密钥
 
 # 快照源数据库ID
@@ -63,10 +63,10 @@ BARK_ICON_URL=https://assets.coingecko.com/coins/images/1/large/bitcoin.png
 ```
 vercel部署直接设置相应环境变量即可
 
-普通 API 和 Vercel Cron 使用不同请求头鉴权：
+普通 API 和外部定时器使用不同请求头鉴权：
 
 - 普通 API：请求头使用 `x-api-token: 你的TOKEN`
-- Vercel Cron 入口 `/api/cron`：请求头使用 `Authorization: Bearer 你的CRON_SECRET`
+- 外部定时入口 `/api/cron`：请求头使用 `Authorization: Bearer 你的CRON_SECRET`
 - 如果未设置 `CRON_SECRET`，`/api/cron` 会复用 `API_SECRET`
 
 ## 📁 文件说明
@@ -94,20 +94,11 @@ curl -H "x-api-token: 你的TOKEN" http://127.0.0.1:5000/api/sync-crypto-summary
 curl -H "Authorization: Bearer 你的CRON_SECRET" http://127.0.0.1:5000/api/cron
 ```
 
-Vercel 部署后会读取 `vercel.json` 中的 Cron 配置，定时调用统一入口：
+部署到 Vercel 后，`/api/cron` 作为统一入口，由外部定时器按需调用：
 
 ```text
-/api/cron
+GET /api/cron   (Authorization: Bearer 你的CRON_SECRET)
 ```
-
-当前定时任务按 `Asia/Tokyo` 时间每天执行 4 次：
-
-1. 00:00
-2. 05:00
-3. 12:00
-4. 17:00
-
-Vercel Cron 使用 UTC 时间，所以 `vercel.json` 中配置为 `0 3,8,15,20 * * *`。
 
 `/api/cron` 会按以下顺序执行：
 
@@ -120,7 +111,7 @@ Vercel Cron 使用 UTC 时间，所以 `vercel.json` 中配置为 `0 3,8,15,20 *
 - `group`: `cmc_api`
 - 通知图标：Bitcoin 图标
 
-原来的三个 API 仍然可以被外部调用，调用方式不变；如果旧的外部定时器继续运行，会和 Vercel Cron 重复执行，建议部署验证后关闭旧定时器。
+`vercel.json` 不配置任何 Cron（不启用 Vercel 定时任务），由外部定时器负责触发，例如 GitHub Actions、VPS crontab、iOS 快捷指令等。
 
 ## 🕐 历史价格（Supabase）
 
