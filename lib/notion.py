@@ -319,16 +319,18 @@ def notion_sync_exchange_summary(
     """
     按「当前持仓」口径重算并写入 交易所汇总（每行一个交易所）。
 
-    背景：交易所汇总的 持仓市值 / 盈亏 曾由 Notion rollup（按 交易记录_自动）计算，
+    背景：交易所汇总的 持仓市值 / 盈亏 / 仓位占比 曾由 Notion rollup（按 交易记录_自动）计算，
     但该口径按「平台当前市值」逐笔线性累加，卖出数量与买入不匹配时会算偏
     （如 Kraken 卖出 ADA 后市值被算成 2.46）。这里改为由 API 直接写入 number：
     - 持仓市值 = Σ(该交易所、每币种 净持仓数量>0 时 净数量 × 当前价格)
     - 盈亏     = Σ(该交易所所有交易的 平台累计盈亏)
+    - 全仓总市值 = Σ(全部交易所的 持仓市值)
+    - 仓位占比 = 持仓市值 / 全仓总市值
 
     行为：
     - 读取 交易记录（Crypto Portfolio）：按 交易所×持仓 分组，累加 买入数量-卖出数量
     - 读取 Holdings：建立 持仓id -> 当前价格 映射
-    - 读取 交易所汇总：按 交易所行 id 匹配，写入 持仓市值 / 盈亏（number）
+    - 读取 交易所汇总：按 交易所行 id 匹配，写入 持仓市值 / 盈亏 / 全仓总市值 / 仓位占比（number）
     """
     def _data_source_id(database_id: str) -> str:
         resp = notion.databases.retrieve(database_id=database_id)
@@ -370,11 +372,12 @@ def notion_sync_exchange_summary(
         pnl = props.get("平台累计盈亏", {}).get("formula", {}).get("number") or 0
         pnl_by_exchange[exchange_id] = pnl_by_exchange.get(exchange_id, 0) + pnl
 
-    # 3. 交易所汇总：按行 id 匹配写入
+    # 3. 交易所汇总：先算出每行市值，再据全仓总市值写 全仓总市值 / 仓位占比
     exchange_ds = _data_source_id(EXCHANGE_DB_ID)
     exchange_response = notion.data_sources.query(data_source_id=exchange_ds)
 
-    updated = []
+    # 先聚合所有交易所行的市值（含负值，用于全仓总市值基数）。
+    market_by_exchange = {}
     for row in exchange_response["results"]:
         exchange_id = row["id"]
         coins = by_exchange.get(exchange_id, {})
@@ -385,11 +388,26 @@ def notion_sync_exchange_summary(
                 continue
             market_value += net_qty * price_by_holding.get(holding_id, 0)
 
+        market_by_exchange[exchange_id] = market_value
+
+    # 全仓总市值：所有「非负净持仓」交易所的市值之和（清仓/调整不计入）。
+    total_market_value = sum(market_by_exchange.values())
+
+    updated = []
+    for row in exchange_response["results"]:
+        exchange_id = row["id"]
+        market_value = market_by_exchange.get(exchange_id, 0.0)
+        allocation = (
+            market_value / total_market_value if total_market_value > 0 else 0
+        )
+
         notion.pages.update(
             page_id=row["id"],
             properties={
                 "持仓市值": {"number": round(market_value, 4)},
                 "盈亏": {"number": round(pnl_by_exchange.get(exchange_id, 0), 4)},
+                "全仓总市值": {"number": round(total_market_value, 4)},
+                "仓位占比": {"number": round(allocation, 6)},
             },
         )
         updated.append(exchange_id)
