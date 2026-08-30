@@ -310,6 +310,93 @@ def notion_sync_summary_values(
     return {"updated_count": len(updated)}
 
 
+def notion_sync_exchange_summary(
+    notion: Client,
+    PORTFOLIO_DB_ID: str,
+    HOLDINGS_DB_ID: str,
+    EXCHANGE_DB_ID: str,
+):
+    """
+    按「当前持仓」口径重算并写入 交易所汇总（每行一个交易所）。
+
+    背景：交易所汇总的 持仓市值 / 盈亏 曾由 Notion rollup（按 交易记录_自动）计算，
+    但该口径按「平台当前市值」逐笔线性累加，卖出数量与买入不匹配时会算偏
+    （如 Kraken 卖出 ADA 后市值被算成 2.46）。这里改为由 API 直接写入 number：
+    - 持仓市值 = Σ(该交易所、每币种 净持仓数量>0 时 净数量 × 当前价格)
+    - 盈亏     = Σ(该交易所所有交易的 平台累计盈亏)
+
+    行为：
+    - 读取 交易记录（Crypto Portfolio）：按 交易所×持仓 分组，累加 买入数量-卖出数量
+    - 读取 Holdings：建立 持仓id -> 当前价格 映射
+    - 读取 交易所汇总：按 交易所行 id 匹配，写入 持仓市值 / 盈亏（number）
+    """
+    def _data_source_id(database_id: str) -> str:
+        resp = notion.databases.retrieve(database_id=database_id)
+        sources = resp.get("data_sources", [])
+        if not sources:
+            raise ValueError(f"No data sources found for DB {database_id}")
+        return sources[0]["id"]
+
+    # 1. Holdings：持仓id -> 当前价格
+    holdings_ds = _data_source_id(HOLDINGS_DB_ID)
+    holdings_response = notion.data_sources.query(data_source_id=holdings_ds)
+    price_by_holding = {}
+    for row in holdings_response["results"]:
+        props = row.get("properties", {})
+        price = props.get("当前价格", {}).get("rollup", {}).get("number") or 0
+        price_by_holding[row["id"]] = price
+
+    # 2. 交易记录：按 交易所×持仓 分组，净持仓数量 + 累计盈亏
+    portfolio_ds = _data_source_id(PORTFOLIO_DB_ID)
+    portfolio_response = notion.data_sources.query(data_source_id=portfolio_ds)
+
+    by_exchange = {}  # exchange_id -> { holding_id: net_qty }
+    pnl_by_exchange = {}  # exchange_id -> cumulative_pnl
+
+    for row in portfolio_response["results"]:
+        props = row.get("properties", {})
+        exchange_id = (props.get("交易所", {}).get("relation") or [{}])[0].get("id")
+        holding_id = (props.get("持仓", {}).get("relation") or [{}])[0].get("id")
+        if not exchange_id or not holding_id:
+            continue
+
+        buy_qty = props.get("买入数量", {}).get("formula", {}).get("number") or 0
+        sell_qty = props.get("卖出数量", {}).get("formula", {}).get("number") or 0
+        net_qty = buy_qty - sell_qty
+
+        coins = by_exchange.setdefault(exchange_id, {})
+        coins[holding_id] = coins.get(holding_id, 0) + net_qty
+
+        pnl = props.get("平台累计盈亏", {}).get("formula", {}).get("number") or 0
+        pnl_by_exchange[exchange_id] = pnl_by_exchange.get(exchange_id, 0) + pnl
+
+    # 3. 交易所汇总：按行 id 匹配写入
+    exchange_ds = _data_source_id(EXCHANGE_DB_ID)
+    exchange_response = notion.data_sources.query(data_source_id=exchange_ds)
+
+    updated = []
+    for row in exchange_response["results"]:
+        exchange_id = row["id"]
+        coins = by_exchange.get(exchange_id, {})
+
+        market_value = 0.0
+        for holding_id, net_qty in coins.items():
+            if net_qty <= 0:
+                continue
+            market_value += net_qty * price_by_holding.get(holding_id, 0)
+
+        notion.pages.update(
+            page_id=row["id"],
+            properties={
+                "持仓市值": {"number": round(market_value, 4)},
+                "盈亏": {"number": round(pnl_by_exchange.get(exchange_id, 0), 4)},
+            },
+        )
+        updated.append(exchange_id)
+
+    return {"updated_count": len(updated)}
+
+
 def notion_get_pending_or_error_holdings(
     notion: Client,
     HOLDINGS_DB_ID: str,

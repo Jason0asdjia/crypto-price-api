@@ -50,6 +50,12 @@ NOTION_SUMMARY_DATABASE_ID
 # Holdings GLobal 数据库ID（账户级累计汇总，如未设置会回退到 NOTION_SUMMARY_DATABASE_ID）
 NOTION_HOLDINGS_GLOBAL_DATABASE_ID
 
+# 交易记录库（Crypto Portfolio）数据库ID，用于交易所视角聚合（如未设置会回退到 Holdings 库）
+NOTION_PORTFOLIO_DATABASE_ID
+
+# 交易所汇总库数据库ID（每行一个交易所，由 API 写入当前持仓市值/盈亏）
+NOTION_EXCHANGE_DATABASE_ID
+
 # 缓存地址
 REDIS_URL=Vercel上创建redis后获取
 

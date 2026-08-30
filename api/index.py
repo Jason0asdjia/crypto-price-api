@@ -19,7 +19,8 @@ from lib.supabase_store import save_prices_snapshot
 from lib.notion import notion_get, notion_update, notion_get_holdings_rows, notion_create_account_snapshot,\
                         notion_get_pending_or_error_holdings, mark_holdings_as_error, mark_holdings_as_synced,\
                         sync_summary_for_new_holdings_rows, notion_get_all_holdings_rows,\
-                        notion_upsert_account_summary, notion_sync_summary_values
+                        notion_upsert_account_summary, notion_sync_summary_values,\
+                        notion_sync_exchange_summary
 
 
 
@@ -41,6 +42,8 @@ NOTION_HOLDINGS_DATABASE_ID = os.environ["NOTION_HOLDINGS_DATABASE_ID"]
 NOTION_SNAPSHOT_DATABASE_ID = os.environ["NOTION_SNAPSHOT_DATABASE_ID"]
 NOTION_SUMMARY_DATABASE_ID = os.environ["NOTION_SUMMARY_DATABASE_ID"]
 NOTION_HOLDINGS_GLOBAL_DATABASE_ID = os.environ.get("NOTION_HOLDINGS_GLOBAL_DATABASE_ID") or NOTION_SUMMARY_DATABASE_ID
+NOTION_PORTFOLIO_DATABASE_ID = os.environ.get("NOTION_PORTFOLIO_DATABASE_ID") or NOTION_HOLDINGS_DATABASE_ID
+NOTION_EXCHANGE_DATABASE_ID = os.environ.get("NOTION_EXCHANGE_DATABASE_ID") or NOTION_SUMMARY_DATABASE_ID
 API_SECRET = os.getenv("API_SECRET")
 BARK_BASE_URL = os.getenv("BARK_BASE_URL")
 BARK_ICON_URL = os.getenv("BARK_ICON_URL", "https://assets.coingecko.com/coins/images/1/large/bitcoin.png")
@@ -101,6 +104,7 @@ def cron():
         ("sync-crypto-summary", sync_crypto_summary, {}),
         ("update-account-snapshot", update_account_snapshot, {"timezone": "Asia/Tokyo"}),
         ("update-account-summary", update_account_summary, {}),
+        ("update-exchange-summary", update_exchange_summary, {}),
     ]
     results = []
 
@@ -480,6 +484,50 @@ def update_account_summary():
             "账户累计收益率": round(total_cumulative_pnl / total_cost, 6) if total_cost else 0,
             "updated": result.get("updated"),
             "summary_synced": cost_sync.get("updated_count"),
+        }), 200
+
+    except APIResponseError as e:
+        return jsonify({
+            "error": "Notion API error",
+            "message": str(e),
+            "status_code": e.status
+        }), 502
+
+    except KeyError as e:
+        return jsonify({
+            "error": "Notion schema error",
+            "message": f"Missing property: {str(e)}"
+        }), 500
+
+    except Exception as e:
+        return jsonify({
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+
+
+@app.route('/api/update-exchange-summary', methods=['GET'])
+def update_exchange_summary():
+    """
+    按「当前持仓」口径重算并写入 交易所汇总（每行一个交易所）。
+
+    交易所汇总的 持仓市值 / 盈亏 曾由 Notion rollup（按 交易记录_自动）计算，
+    卖出与买入数量不匹配时会算偏。改为由 API 读取 交易记录 + Holdings，
+    按 净持仓数量×当前价 计算持仓市值，并累加 平台累计盈亏 作为盈亏，写入 number。
+    """
+    try:
+        notion = Client(auth=NOTION_TOKEN)
+
+        result = notion_sync_exchange_summary(
+            notion=notion,
+            PORTFOLIO_DB_ID=NOTION_PORTFOLIO_DATABASE_ID,
+            HOLDINGS_DB_ID=NOTION_HOLDINGS_DATABASE_ID,
+            EXCHANGE_DB_ID=NOTION_EXCHANGE_DATABASE_ID,
+        )
+
+        return jsonify({
+            "status": "success",
+            **result,
         }), 200
 
     except APIResponseError as e:
