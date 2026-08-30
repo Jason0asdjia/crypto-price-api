@@ -239,6 +239,77 @@ def notion_upsert_account_summary(
     return {"updated": updated}
 
 
+def notion_sync_summary_values(
+    notion: Client,
+    HOLDINGS_DB_ID: str,
+    SUMMARY_DB_ID: str,
+):
+    """
+    把每币种的「累计总成本 / 累计总盈亏」写入 Crypto Summary 的对应行。
+
+    背景：Crypto Summary 的 累计总成本 / 累计总盈亏 曾是 rollup（汇总持仓对应字段），
+    但 Notion 无法对「单 rollup 透传公式」做二次 rollup，跨库汇总恒为 0，
+    导致每币种 累计收益率 = 0%。这里改为由 API 直接写入 number。
+
+    行为：
+    - 读取 Holdings 全部行（含已清仓）
+    - 读取 Crypto Summary 全部行，按 持仓币种 关系匹配到 Holdings 行
+    - 把 Holdings 行的 总买入成本（rollup）、累计总盈亏（formula）分别写入 Summary 行的 累计总成本 / 累计总盈亏（number）
+    """
+    # 1. Holdings 全部行 → {holdings_id: {cost, cumulative_pnl}}
+    holdings_db = notion.databases.retrieve(database_id=HOLDINGS_DB_ID)
+    holdings_sources = holdings_db.get("data_sources", [])
+    if not holdings_sources:
+        raise ValueError("No data sources found in Holdings DB")
+
+    holdings_response = notion.data_sources.query(
+        data_source_id=holdings_sources[0]["id"],
+    )
+    holdings_values = {}
+    for row in holdings_response["results"]:
+        props = row.get("properties", {})
+        cost = props.get("总买入成本", {}).get("rollup", {}).get("number") or 0
+        cumulative_pnl = (
+            props.get("累计总盈亏", {}).get("formula", {}).get("number") or 0
+        )
+        holdings_values[row["id"]] = {
+            "cost": cost,
+            "cumulative_pnl": cumulative_pnl,
+        }
+
+    # 2. Summary 全部行 → 按 持仓币种 关系匹配，写入 累计总成本 / 累计总盈亏
+    db_response = notion.databases.retrieve(database_id=SUMMARY_DB_ID)
+    data_sources = db_response.get("data_sources", [])
+    if not data_sources:
+        raise ValueError("No data sources found in Summary DB")
+
+    summary_response = notion.data_sources.query(
+        data_source_id=data_sources[0]["id"],
+    )
+
+    updated = []
+    for row in summary_response["results"]:
+        props = row.get("properties", {})
+        rel = props.get("持仓币种", {}).get("relation", [])
+        if not rel:
+            continue
+        values = holdings_values.get(rel[0]["id"])
+
+        if values is None:
+            continue
+
+        notion.pages.update(
+            page_id=row["id"],
+            properties={
+                "累计总成本": {"number": round(values["cost"], 4)},
+                "累计总盈亏": {"number": round(values["cumulative_pnl"], 4)},
+            },
+        )
+        updated.append(row["id"])
+
+    return {"updated_count": len(updated)}
+
+
 def notion_get_pending_or_error_holdings(
     notion: Client,
     HOLDINGS_DB_ID: str,

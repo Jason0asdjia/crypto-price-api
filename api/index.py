@@ -19,7 +19,7 @@ from lib.supabase_store import save_prices_snapshot
 from lib.notion import notion_get, notion_update, notion_get_holdings_rows, notion_create_account_snapshot,\
                         notion_get_pending_or_error_holdings, mark_holdings_as_error, mark_holdings_as_synced,\
                         sync_summary_for_new_holdings_rows, notion_get_all_holdings_rows,\
-                        notion_upsert_account_summary
+                        notion_upsert_account_summary, notion_sync_summary_values
 
 
 
@@ -431,6 +431,7 @@ def update_account_summary():
     - 汇总 账户总市值 / 账户累计总成本 / 账户累计总盈亏
     - 写入 Holdings GLobal 的「All Holdings」行（number 字段）
     - 账户累计收益率 为 formula，由 Notion 自动计算
+    - 同步 Crypto Summary 每币种行的「累计总成本 / 累计总盈亏」（number，绕开 Notion rollup 限制）
     """
     try:
         notion = Client(auth=NOTION_TOKEN)
@@ -464,6 +465,13 @@ def update_account_summary():
             total_cumulative_pnl=total_cumulative_pnl,
         )
 
+        # 同步 Crypto Summary 每币种行的「累计总成本 / 累计总盈亏」
+        cost_sync = notion_sync_summary_values(
+            notion=notion,
+            HOLDINGS_DB_ID=NOTION_HOLDINGS_DATABASE_ID,
+            SUMMARY_DB_ID=NOTION_SUMMARY_DATABASE_ID,
+        )
+
         return jsonify({
             "status": "success",
             "账户总市值": round(total_market_value, 4),
@@ -471,6 +479,7 @@ def update_account_summary():
             "账户累计总盈亏": round(total_cumulative_pnl, 4),
             "账户累计收益率": round(total_cumulative_pnl / total_cost, 6) if total_cost else 0,
             "updated": result.get("updated"),
+            "summary_synced": cost_sync.get("updated_count"),
         }), 200
 
     except APIResponseError as e:
