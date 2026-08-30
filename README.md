@@ -50,6 +50,10 @@ NOTION_SUMMARY_DATABASE_ID
 # 缓存地址
 REDIS_URL=Vercel上创建redis后获取
 
+# Supabase 历史价格存储（仅服务端，切勿暴露前端）
+SUPABASE_URL=https://你的项目.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=你的service_role_key
+
 # Bark 推送地址，例如 https://api.day.app/你的BarkKey
 BARK_BASE_URL=你的Bark推送地址
 
@@ -117,6 +121,26 @@ Vercel Cron 使用 UTC 时间，所以 `vercel.json` 中配置为 `0 3,8,15,20 *
 - 通知图标：Bitcoin 图标
 
 原来的三个 API 仍然可以被外部调用，调用方式不变；如果旧的外部定时器继续运行，会和 Vercel Cron 重复执行，建议部署验证后关闭旧定时器。
+
+## 🕐 历史价格（Supabase）
+
+`/api/cron-update-cache` 在获取行情并更新 Notion 的同时，会通过 `lib/supabase_store.py` 把每个币的完整行情快照批量 upsert 到 Supabase 的 `crypto_prices` 表：
+
+| 字段 | 说明 |
+| --- | --- |
+| `symbol` | 币种符号 |
+| `name` | 币种名称 |
+| `price` | 最新价格（USD） |
+| `change_24h` | 24小时涨跌幅 |
+| `market_cap` | 市值 |
+| `volume_24h` | 24小时成交量 |
+| `cmc_rank` | CoinMarketCap 排名 |
+| `recorded_at` | 实际入库时间 |
+| `bucket_time` | 小时向下取整的时间（去重键） |
+| `source` | 来源，默认 `crypto-price-api` |
+
+- 以 `unique(symbol, bucket_time)` 去重，同一币种同一小时最多一条，配合 upsert 实现幂等写入。
+- `SUPABASE_SERVICE_ROLE_KEY` 只能放服务端（Vercel 环境变量），绝不能暴露到前端。
 
 ios上使用shortcuts
 ```markdown

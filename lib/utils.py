@@ -59,6 +59,38 @@ def get_cmc_field_data(cmc_data, symbol, field="price"):
 
 
 
+def get_cmc_coin_info(cmc_data, symbol):
+    """
+    从 CMC v2 quotes/latest 返回的 cmc_data 中安全取出一个币的完整行情信息。
+    返回 dict: price / change_24h / market_cap / volume_24h / cmc_rank / name
+    """
+    symbol_data = cmc_data.get('data', {}).get(symbol)
+
+    if not symbol_data:
+        raise ValueError(f"Symbol {symbol} 不存在于返回数据中")
+
+    if isinstance(symbol_data, list):
+        if len(symbol_data) == 0:
+            raise ValueError(f"Symbol {symbol} 数据为空")
+        coin = symbol_data[0]
+    elif isinstance(symbol_data, dict):
+        keys = sorted(symbol_data.keys(), key=lambda x: int(x) if x.isdigit() else 999)
+        coin = symbol_data[keys[0]]
+    else:
+        raise TypeError(f"意外的数据类型: {type(symbol_data)}")
+
+    u = coin.get("quote", {}).get("USD", {})
+
+    return {
+        "name": coin.get("name"),
+        "price": u.get("price"),
+        "change_24h": u.get("percent_change_24h"),
+        "market_cap": u.get("market_cap"),
+        "volume_24h": u.get("volume_24h"),
+        "cmc_rank": coin.get("cmc_rank"),
+    }
+
+
 def now_with_timezone(tz_name: str):
     try:
         tz = ZoneInfo(tz_name)

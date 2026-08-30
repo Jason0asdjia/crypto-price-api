@@ -14,7 +14,8 @@ import time
 from redis import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from lib.utils import get_cmc_field_data, now_with_timezone
+from lib.utils import get_cmc_field_data, get_cmc_coin_info, now_with_timezone
+from lib.supabase_store import save_prices_snapshot
 from lib.notion import notion_get, notion_update, notion_get_holdings_rows, notion_create_account_snapshot,\
                         notion_get_pending_or_error_holdings, mark_holdings_as_error, mark_holdings_as_synced,\
                         sync_summary_for_new_holdings_rows
@@ -156,7 +157,11 @@ def cron_update_cache():
             if cached_price and cached_change:
                 price_data[symbol] = {
                     "price": float(cached_price),
-                    "change_24h": float(cached_change)
+                    "change_24h": float(cached_change),
+                    "name": None,
+                    "market_cap": None,
+                    "volume_24h": None,
+                    "cmc_rank": None,
                 }
                 print(f"Cache hit: {symbol} | price={cached_price} | change={cached_change}")
                 continue
@@ -189,17 +194,13 @@ def cron_update_cache():
                 # 写入缓存 + 收集价格
                 for symbol in symbols_to_fetch:
                     try:
-                        # 价格
-                        price = get_cmc_field_data(cmc_data, symbol, "price")
-
-                        # 24小时涨跌幅
-                        change_24h = get_cmc_field_data(cmc_data, symbol, "percent_change_24h")
+                        # 完整行情信息
+                        info = get_cmc_coin_info(cmc_data, symbol)
+                        price = info["price"]
+                        change_24h = info["change_24h"]
 
                         # 放入本地数据结构
-                        price_data[symbol] = {
-                            "price": price,
-                            "change_24h": change_24h
-                        }
+                        price_data[symbol] = info
 
                         # 缓存
                         if redis_client:
@@ -235,10 +236,18 @@ def cron_update_cache():
             NOTION_CHANGE_24H_PROPERTY_NAME
         )
 
+        # === 写入 Supabase 历史价格（一次取价，同步存历史） ===
+        try:
+            saved_count = save_prices_snapshot(price_data)
+        except Exception as e:
+            print(f"Supabase 快照写入失败（不影响 Notion）: {e}")
+            saved_count = 0
+
 
         return jsonify({
             "status": "Success",
             "updated": updated_count,
+            "saved_to_supabase": saved_count,
             "symbols": symbols_list
         }), 200
 
