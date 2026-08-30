@@ -159,6 +159,86 @@ def notion_create_account_snapshot(
     )
 
 
+def notion_get_all_holdings_rows(notion, HOLDINGS_DATABASE_ID):
+    """
+    Holdings 数据库
+    【账户聚合读取】方法
+    读取全部持仓行（含已清仓/持仓数量<=0 的行），用于「累计」口径的账户汇总。
+    """
+    db_response = notion.databases.retrieve(database_id=HOLDINGS_DATABASE_ID)
+    data_sources = db_response.get("data_sources", [])
+
+    if not data_sources:
+        raise ValueError("No data sources found!")
+
+    data_source_id = data_sources[0]["id"]
+
+    response = notion.data_sources.query(
+        data_source_id=data_source_id,
+    )
+
+    return response["results"]
+
+
+def notion_upsert_account_summary(
+    notion: Client,
+    GLOBAL_DB_ID: str,
+    total_market_value: float,
+    total_cost: float,
+    total_cumulative_pnl: float,
+):
+    """
+    更新 Holdings GLobal 的「All Holdings」汇总行（账户级，累计口径）。
+
+    行为：
+    - 查找 "All Holdings" 行（Holdings GLobal 汇总所有持仓的那一行）
+    - 存在则更新；不存在则创建
+    - 账户累计收益率 为 formula，由 Notion 根据 账户累计总成本/账户累计总盈亏 自动计算
+    """
+    db_response = notion.databases.retrieve(database_id=GLOBAL_DB_ID)
+    data_sources = db_response.get("data_sources", [])
+    if not data_sources:
+        raise ValueError("No data sources found in Holdings GLobal DB")
+
+    data_source_id = data_sources[0]["id"]
+    resp = notion.data_sources.query(data_source_id=data_source_id)
+
+    global_row_id = None
+    for row in resp["results"]:
+        props = row.get("properties", {})
+        title_arr = props.get("All Holdings", {}).get("title", [])
+        if not title_arr:
+            continue
+        if title_arr[0]["plain_text"].strip() == "All Holdings":
+            global_row_id = row["id"]
+            break
+
+    properties = {
+        "账户累计总成本": {"number": round(total_cost, 4)},
+        "账户累计总盈亏": {"number": round(total_cumulative_pnl, 4)},
+    }
+
+    if global_row_id:
+        notion.pages.update(
+            page_id=global_row_id,
+            properties=properties,
+        )
+        updated = global_row_id
+    else:
+        page = notion.pages.create(
+            parent={"database_id": GLOBAL_DB_ID},
+            properties={
+                "All Holdings": {
+                    "title": [{"text": {"content": "All Holdings"}}]
+                },
+                **properties,
+            },
+        )
+        updated = page["id"]
+
+    return {"updated": updated}
+
+
 def notion_get_pending_or_error_holdings(
     notion: Client,
     HOLDINGS_DB_ID: str,

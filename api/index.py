@@ -18,7 +18,8 @@ from lib.utils import get_cmc_field_data, get_cmc_coin_info, now_with_timezone
 from lib.supabase_store import save_prices_snapshot
 from lib.notion import notion_get, notion_update, notion_get_holdings_rows, notion_create_account_snapshot,\
                         notion_get_pending_or_error_holdings, mark_holdings_as_error, mark_holdings_as_synced,\
-                        sync_summary_for_new_holdings_rows
+                        sync_summary_for_new_holdings_rows, notion_get_all_holdings_rows,\
+                        notion_upsert_account_summary
 
 
 
@@ -39,6 +40,7 @@ NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 NOTION_HOLDINGS_DATABASE_ID = os.environ["NOTION_HOLDINGS_DATABASE_ID"]
 NOTION_SNAPSHOT_DATABASE_ID = os.environ["NOTION_SNAPSHOT_DATABASE_ID"]
 NOTION_SUMMARY_DATABASE_ID = os.environ["NOTION_SUMMARY_DATABASE_ID"]
+NOTION_HOLDINGS_GLOBAL_DATABASE_ID = os.environ.get("NOTION_HOLDINGS_GLOBAL_DATABASE_ID") or NOTION_SUMMARY_DATABASE_ID
 API_SECRET = os.getenv("API_SECRET")
 BARK_BASE_URL = os.getenv("BARK_BASE_URL")
 BARK_ICON_URL = os.getenv("BARK_ICON_URL", "https://assets.coingecko.com/coins/images/1/large/bitcoin.png")
@@ -98,6 +100,7 @@ def cron():
         ("cron-update-cache", cron_update_cache, {}),
         ("sync-crypto-summary", sync_crypto_summary, {}),
         ("update-account-snapshot", update_account_snapshot, {"timezone": "Asia/Tokyo"}),
+        ("update-account-summary", update_account_summary, {}),
     ]
     results = []
 
@@ -416,6 +419,79 @@ def sync_crypto_summary():
             "error": "Summary sync failed",
             "message": str(e)
         }), 500
+
+
+@app.route('/api/update-account-summary', methods=['GET'])
+def update_account_summary():
+    """
+    更新 Holdings GLobal 的「All Holdings」汇总行（账户级，累计口径）
+
+    行为：
+    - 读取 Holdings 全部行（含已清仓）
+    - 汇总 账户总市值 / 账户累计总成本 / 账户累计总盈亏
+    - 写入 Holdings GLobal 的「All Holdings」行（number 字段）
+    - 账户累计收益率 为 formula，由 Notion 自动计算
+    """
+    try:
+        notion = Client(auth=NOTION_TOKEN)
+
+        holdings = notion_get_all_holdings_rows(
+            notion,
+            NOTION_HOLDINGS_DATABASE_ID
+        )
+
+        total_market_value = 0.0    # 账户总市值
+        total_cost = 0.0            # 账户累计总成本（所有买入成本，含已清仓）
+        total_cumulative_pnl = 0.0  # 账户累计总盈亏（已实现 + 未实现，含已清仓）
+
+        for row in holdings:
+            props = row["properties"]
+
+            # 当前市值（Formula 字段）
+            total_market_value += props["当前市值"]["formula"]["number"] or 0
+
+            # 总买入成本（Rollup 字段）
+            total_cost += props["总买入成本"]["rollup"]["number"] or 0
+
+            # 累计总盈亏（Formula 字段：已实现收益 + 当前持仓盈亏）
+            total_cumulative_pnl += props["累计总盈亏"]["formula"]["number"] or 0
+
+        result = notion_upsert_account_summary(
+            notion=notion,
+            GLOBAL_DB_ID=NOTION_HOLDINGS_GLOBAL_DATABASE_ID,
+            total_market_value=total_market_value,
+            total_cost=total_cost,
+            total_cumulative_pnl=total_cumulative_pnl,
+        )
+
+        return jsonify({
+            "status": "success",
+            "账户总市值": round(total_market_value, 4),
+            "账户累计总成本": round(total_cost, 4),
+            "账户累计总盈亏": round(total_cumulative_pnl, 4),
+            "账户累计收益率": round(total_cumulative_pnl / total_cost, 6) if total_cost else 0,
+            "updated": result.get("updated"),
+        }), 200
+
+    except APIResponseError as e:
+        return jsonify({
+            "error": "Notion API error",
+            "message": str(e),
+            "status_code": e.status
+        }), 502
+
+    except KeyError as e:
+        return jsonify({
+            "error": "Notion schema error",
+            "message": f"Missing property: {str(e)}"
+        }), 500
+
+    except Exception as e:
+        return jsonify({
+            "error": "Internal server error",
+            "message": str(e)
+        }), 500
+
 
 # # 仅本地测试用
 if __name__ == "__main__":
