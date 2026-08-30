@@ -15,7 +15,7 @@ from redis import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from lib.utils import get_cmc_field_data, get_cmc_coin_info, now_with_timezone
-from lib.supabase_store import save_prices_snapshot
+from lib.supabase_store import save_prices_snapshot, save_holdings_snapshot
 from lib.notion import notion_get, notion_update, notion_get_holdings_rows, notion_create_account_snapshot,\
                         notion_get_pending_or_error_holdings, mark_holdings_as_error, mark_holdings_as_synced,\
                         sync_summary_for_new_holdings_rows, notion_get_all_holdings_rows,\
@@ -304,18 +304,44 @@ def update_account_snapshot():
             NOTION_HOLDINGS_DATABASE_ID
         )
 
-        # 计算账户级指标
+        # 计算账户级指标 + 收集分币种持仓快照
         total_market_value = 0.0   # 账户总市值
         total_invested = 0.0       # 账户总投入（历史买入成本）
+        holdings_snapshot = []     # 分币种持仓快照
 
         for row in holdings:
             props = row["properties"]
 
             # 当前市值（Formula 字段）
-            total_market_value += props["当前市值"]["formula"]["number"] or 0
+            market_value = props["当前市值"]["formula"]["number"] or 0
+            total_market_value += market_value
 
             # 总买入成本（Rollup 字段）
-            total_invested += props["总买入成本"]["rollup"]["number"] or 0
+            cost = props["总买入成本"]["rollup"]["number"] or 0
+            total_invested += cost
+
+            # 分币种字段
+            symbol = (
+                props.get("币种", {}).get("title", [{}])[0].get("plain_text", "").strip().upper()
+            )
+            if not symbol:
+                continue
+
+            quantity = props.get("当前持仓数量", {}).get("number") or 0
+            pnl = props.get("当前持仓总盈亏", {}).get("formula", {}).get("number")
+            pnl_rate = props.get("当前持仓收益率", {}).get("formula", {}).get("number")
+
+            holdings_snapshot.append({
+                "symbol": symbol,
+                "name": symbol,
+                "quantity": quantity,
+                # 单价由 市值 / 数量 派生，数量为 0 时置空
+                "price": (market_value / quantity) if quantity else None,
+                "cost": cost,
+                "market_value": market_value,
+                "pnl": pnl,
+                "pnl_rate": pnl_rate,
+            })
 
         # 总盈亏 = 当前市值 - 总投入
         total_pnl = total_market_value - total_invested
@@ -331,6 +357,13 @@ def update_account_snapshot():
             snapshot_time
         )
 
+        # === 写入 Supabase 分币种持仓快照（失败不影响 Notion 流程） ===
+        try:
+            saved_holdings = save_holdings_snapshot(holdings_snapshot, snapshot_time)
+        except Exception as e:
+            print(f"Supabase 持仓快照写入失败（不影响 Notion）: {e}")
+            saved_holdings = 0
+
         return jsonify({
             "status": "success",
             "snapshot_time": snapshot_time,
@@ -338,7 +371,8 @@ def update_account_snapshot():
             "总市值": total_market_value,
             "总投入": total_invested,
             "总盈亏": total_pnl,
-            "资产数量": len(holdings)
+            "资产数量": len(holdings),
+            "saved_holdings_to_supabase": saved_holdings
         })
 
     # ❌ 异常处理（分类型）

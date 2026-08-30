@@ -142,6 +142,28 @@ GET /api/cron   (Authorization: Bearer 你的CRON_SECRET)
 - 以 `unique(symbol, bucket_time)` 去重，同一币种同一小时最多一条，配合 upsert 实现幂等写入。
 - `SUPABASE_SERVICE_ROLE_KEY` 只能放服务端（Vercel 环境变量），绝不能暴露到前端。
 
+## 👥 分币种持仓快照（Supabase）
+
+`/api/update-account-snapshot` 在读取持仓并更新账户快照的同时，会通过 `lib/supabase_store.py` 把每个币的持仓状态批量 upsert 到 Supabase 的 `crypto_holdings_snapshot` 表：
+
+| 字段 | 说明 |
+| --- | --- |
+| `symbol` | 币种符号 |
+| `name` | 币种名称 |
+| `quantity` | 当前持仓数量 |
+| `price` | 当前单价（由 市值/数量 派生） |
+| `cost` | 该币种投入成本 |
+| `market_value` | 当前市值 |
+| `pnl` | 盈亏（市值 − 成本） |
+| `pnl_rate` | 收益率 |
+| `recorded_at` | 实际入库时间 |
+| `bucket_time` | 小时向下取整的时间（去重键） |
+| `source` | 来源，默认 `crypto-price-api` |
+
+- 同样以 `unique(symbol, bucket_time)` 去重 + upsert 幂等写入。
+- 盈亏依赖「持仓数量 × 价格 − 成本」，随买卖变动，无法由行情事后重建，因此必须以快照形式存档，用于单币种每日盈亏/收益率/市值曲线。
+- `SUPABASE_SERVICE_ROLE_KEY` 只能放服务端（Vercel 环境变量），绝不能暴露到前端。
+
 ios上使用shortcuts
 ```markdown
 1. 创建获取URL内容：填写url(Vercel部署后的url)，头部添加x-api-token: 你的TOKEN
