@@ -344,7 +344,8 @@ def update_account_snapshot():
             if not symbol:
                 continue
 
-            quantity = props.get("当前持仓数量", {}).get("number") or 0
+            # 当前持仓数量是 Formula 字段，数值位于 formula.number
+            quantity = props["当前持仓数量"]["formula"]["number"] or 0
             pnl = props.get("当前持仓总盈亏", {}).get("formula", {}).get("number")
             pnl_rate = props.get("当前持仓收益率", {}).get("formula", {}).get("number")
 
