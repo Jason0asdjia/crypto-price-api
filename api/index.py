@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 import os
 import sys
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 # ==================== Vercel 关键修复 ====================
 # 把项目根目录加入 Python 路径，这样才能 import lib
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -99,10 +100,20 @@ def _send_bark_notification(results):
 
 @app.route('/api/cron', methods=['GET'])
 def cron():
+    tz_name = request.args.get("timezone", "Asia/Tokyo")
+    bark = request.args.get("bark", "true").strip().lower()
+    if bark not in ("true", "false"):
+        return jsonify({"error": "bark must be true or false"}), 400
+
+    try:
+        ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return jsonify({"error": "Invalid timezone", "timezone": tz_name}), 400
+
     jobs = [
         ("cron-update-cache", cron_update_cache, {}),
         ("sync-crypto-summary", sync_crypto_summary, {}),
-        ("update-account-snapshot", update_account_snapshot, {"timezone": "Asia/Tokyo"}),
+        ("update-account-snapshot", update_account_snapshot, {"timezone": tz_name}),
         ("update-account-summary", update_account_summary, {}),
         ("update-exchange-summary", update_exchange_summary, {}),
     ]
@@ -127,13 +138,19 @@ def cron():
                 "results": results,
             }), 500
 
-    try:
-        notification = _send_bark_notification(results)
-    except requests.exceptions.RequestException as e:
+    if bark == "false":
         notification = {
-            "status": "failed",
-            "error": str(e),
+            "status": "skipped",
+            "reason": "Bark notifications are disabled by bark=false",
         }
+    else:
+        try:
+            notification = _send_bark_notification(results)
+        except requests.exceptions.RequestException as e:
+            notification = {
+                "status": "failed",
+                "error": str(e),
+            }
 
     return jsonify({
         "status": "success",

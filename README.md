@@ -100,22 +100,34 @@ curl -H "x-api-token: 你的TOKEN" http://127.0.0.1:5000/api/update-account-snap
 
 curl -H "x-api-token: 你的TOKEN" http://127.0.0.1:5000/api/sync-crypto-summary
 
-curl -H "Authorization: Bearer 你的CRON_SECRET" http://127.0.0.1:5000/api/cron
+curl -H "Authorization: Bearer 你的CRON_SECRET" "http://127.0.0.1:5000/api/cron?timezone=Asia/Shanghai&bark=true"
 ```
 
 部署到 Vercel 后，`/api/cron` 作为统一入口，由外部定时器按需调用：
 
 ```text
-GET /api/cron   (Authorization: Bearer 你的CRON_SECRET)
+GET /api/cron?timezone=Asia/Shanghai&bark=true   (Authorization: Bearer 你的CRON_SECRET)
 ```
+
+可选查询参数：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `timezone` | `Asia/Tokyo` | IANA 时区名，传入账户快照步骤，例如 `Asia/Shanghai`、`UTC`。 |
+| `bark` | `true` | `true`：全部步骤成功后发送已有 Bark 通知；`false`：执行全部步骤，但不发送通知。 |
+
+例如，只同步数据、不发送通知：`/api/cron?timezone=Asia/Shanghai&bark=false`。
+时区无效或 `bark` 不是 `true` / `false` 时，返回 HTTP 400，不执行任何步骤。
 
 `/api/cron` 会按以下顺序执行：
 
 1. `/api/cron-update-cache`
 2. `/api/sync-crypto-summary`
-3. `/api/update-account-snapshot?timezone=Asia/Tokyo`
+3. `/api/update-account-snapshot?timezone=<传入的 timezone>`
+4. `/api/update-account-summary`
+5. `/api/update-exchange-summary`
 
-三个任务全部成功后，会发送 Bark 通知：
+五个任务全部成功且 `bark=true` 时，会发送 Bark 通知（需配置 `BARK_BASE_URL`）：
 
 - `group`: `cmc_api`
 - 通知图标：Bitcoin 图标
